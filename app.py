@@ -17,6 +17,11 @@ if pilot_file and drone_file and mission_file:
 
     st.success("All files loaded successfully ✅")
 
+    # Debug view (optional but helpful)
+    # st.write("Pilot Columns:", pilots.columns.tolist())
+    # st.write("Drone Columns:", drones.columns.tolist())
+    # st.write("Mission Columns:", missions.columns.tolist())
+
     # ---------- SELECT MISSION ----------
     st.subheader("🎯 Select Mission")
     mission_index = st.selectbox("Choose Mission", missions.index)
@@ -28,28 +33,51 @@ if pilot_file and drone_file and mission_file:
     # ---------- ASSIGNMENT LOGIC ----------
     if st.button("Run Assignment Agent"):
 
-        # Normalize text
-        pilots["skills"] = pilots["skills"].fillna("").str.lower()
-        mission_skill = str(mission["required_skills"]).lower()
+        # -------- SAFE COLUMN DETECTION --------
+
+        # Detect skill column dynamically
+        skill_column = None
+        for col in pilots.columns:
+            if "skill" in col.lower():
+                skill_column = col
+                break
+
+        if skill_column is None:
+            st.error("❌ No skill-related column found in Pilot CSV")
+            st.stop()
+
+        # Normalize skill text
+        pilots[skill_column] = pilots[skill_column].fillna("").astype(str).str.lower()
+        mission_skill = str(mission.get("required_skills", "")).lower()
+
+        # Normalize status/location columns safely
+        if "status" not in pilots.columns or "location" not in pilots.columns:
+            st.error("❌ Pilot CSV must contain 'status' and 'location' columns")
+            st.stop()
+
+        if "status" not in drones.columns or "location" not in drones.columns:
+            st.error("❌ Drone CSV must contain 'status' and 'location' columns")
+            st.stop()
 
         # ---------- FIND MATCHING PILOTS ----------
         matching_pilots = pilots[
-            (pilots["status"] == "Available") &
-            (pilots["skills"].str.contains(mission_skill)) &
-            (pilots["location"] == mission["location"])
+            (pilots["status"].astype(str).str.lower() == "available") &
+            (pilots[skill_column].str.contains(mission_skill)) &
+            (pilots["location"] == mission.get("location"))
         ]
 
         # ---------- FIND MATCHING DRONES ----------
         matching_drones = drones[
-            (drones["status"] == "Available") &
-            (drones["location"] == mission["location"])
+            (drones["status"].astype(str).str.lower() == "available") &
+            (drones["location"] == mission.get("location"))
         ]
 
-        # Weather rule
-        if mission["weather"] == "Rainy":
-            matching_drones = matching_drones[
-                matching_drones["weather_rating"] == "IP43"
-            ]
+        # Weather rule (if column exists)
+        if "weather" in mission and "weather_rating" in drones.columns:
+            if str(mission["weather"]).lower() == "rainy":
+                matching_drones = matching_drones[
+                    matching_drones["weather_rating"] == "IP43"
+                ]
 
         # ---------- RESULTS ----------
         if matching_pilots.empty:
@@ -71,23 +99,36 @@ if pilot_file and drone_file and mission_file:
             # ---------- CONFLICT CHECK ----------
             conflicts = []
 
-            if mission_skill not in pilot["skills"]:
+            # Skill check
+            if mission_skill not in pilot[skill_column]:
                 conflicts.append("Skill mismatch")
 
-            if drone["status"] == "Maintenance":
+            # Maintenance check
+            if "maintenance" in drone["status"].lower():
                 conflicts.append("Drone under maintenance")
 
-            if mission["weather"] == "Rainy" and drone["weather_rating"] != "IP43":
-                conflicts.append("Weather compatibility issue")
+            # Weather compatibility
+            if "weather" in mission and "weather_rating" in drones.columns:
+                if str(mission["weather"]).lower() == "rainy" and drone.get("weather_rating") != "IP43":
+                    conflicts.append("Weather compatibility issue")
 
+            # Location mismatch
             if pilot["location"] != drone["location"]:
                 conflicts.append("Location mismatch")
 
-            cost = pilot["daily_rate"] * mission["duration_days"]
+            # Budget check (safe)
+            daily_rate = pilot.get("daily_rate", 0)
+            duration = mission.get("duration_days", 0)
+            budget = mission.get("budget", 0)
 
-            if cost > mission["budget"]:
-                conflicts.append("Budget overrun")
+            try:
+                cost = float(daily_rate) * float(duration)
+                if budget and cost > float(budget):
+                    conflicts.append("Budget overrun")
+            except:
+                pass
 
+            # Display conflicts
             if conflicts:
                 st.warning("⚠ Conflicts Detected:")
                 for c in conflicts:
