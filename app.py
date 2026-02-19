@@ -26,18 +26,18 @@ missions = pd.read_csv(mission_file)
 st.success("All files loaded successfully ✅")
 
 # ======================================================
-# Normalize Text Columns (Safe)
+# Normalize Text Columns (SAFE)
 # ======================================================
-pilots["skills"] = pilots["skills"].fillna("").str.lower()
-pilots["certifications"] = pilots["certifications"].fillna("").str.lower()
-pilots["status"] = pilots["status"].fillna("").str.lower()
+pilots["skills"] = pilots["skills"].fillna("").astype(str).str.lower()
+pilots["certifications"] = pilots["certifications"].fillna("").astype(str).str.lower()
+pilots["status"] = pilots["status"].fillna("").astype(str).str.lower()
 
-drones["status"] = drones["status"].fillna("").str.lower()
-drones["weather_resistance"] = drones["weather_resistance"].fillna("").str.upper()
+drones["status"] = drones["status"].fillna("").astype(str).str.lower()
+drones["weather_resistance"] = drones["weather_resistance"].fillna("").astype(str).str.upper()
 
-missions["required_skills"] = missions["required_skills"].fillna("").str.lower()
-missions["required_certs"] = missions["required_certs"].fillna("").str.lower()
-missions["weather_forecast"] = missions["weather_forecast"].fillna("").str.lower()
+missions["required_skills"] = missions["required_skills"].fillna("").astype(str).str.lower()
+missions["required_certs"] = missions["required_certs"].fillna("").astype(str).str.lower()
+missions["weather_forecast"] = missions["weather_forecast"].fillna("").astype(str).str.lower()
 
 # ======================================================
 # Select Mission
@@ -61,45 +61,52 @@ if st.button("Run Assignment Agent"):
     mission_budget = mission["mission_budget_inr"]
 
     # --------------------------------------------------
-    # Find Available Pilots
+    # Find Available Pilots (SOFT MATCH)
     # --------------------------------------------------
     matching_pilots = pilots[
-        (pilots["status"] == "available") &
+        (pilots["status"].str.contains("available")) &
         (pilots["skills"].str.contains(mission_skill)) &
-        (pilots["certifications"].str.contains(mission_cert)) &
         (pilots["location"] == mission_location)
     ]
 
-    # --------------------------------------------------
-    # Find Available Drones
-    # --------------------------------------------------
-    matching_drones = drones[
-        (drones["status"] == "available") &
-        (drones["location"] == mission_location)
-    ]
-
-    # Weather compatibility
-    if mission_weather == "rainy":
-        matching_drones = matching_drones[
-            matching_drones["weather_resistance"] == "IP43"
-        ]
-
-    # --------------------------------------------------
-    # No Matches
-    # --------------------------------------------------
     if matching_pilots.empty:
         st.error("❌ No suitable pilot available.")
         st.stop()
 
+    pilot = matching_pilots.iloc[0]
+
+    # --------------------------------------------------
+    # Find Available Drones (SOFT MATCH)
+    # --------------------------------------------------
+    matching_drones = drones[
+        (drones["status"].str.contains("available")) &
+        (drones["location"] == mission_location)
+    ]
+
     if matching_drones.empty:
-        st.error("❌ No suitable drone available.")
+        st.error("❌ No drone available at mission location.")
         st.stop()
 
-    # Select first valid candidates
-    pilot = matching_pilots.iloc[0]
+    # --------------------------------------------------
+    # Weather Handling (WARN, DON’T FAIL)
+    # --------------------------------------------------
+    weather_warning = False
+
+    if mission_weather == "rainy":
+        ip43_drones = matching_drones[
+            matching_drones["weather_resistance"] == "IP43"
+        ]
+        if not ip43_drones.empty:
+            matching_drones = ip43_drones
+        else:
+            weather_warning = True  # allow with warning
+
     drone = matching_drones.iloc[0]
 
-    st.success("✅ Assignment Successful")
+    # ==================================================
+    # Assignment Output
+    # ==================================================
+    st.success("✅ Assignment Generated")
 
     st.subheader("👨‍✈️ Assigned Pilot")
     st.json(pilot.to_dict())
@@ -108,7 +115,7 @@ if st.button("Run Assignment Agent"):
     st.json(drone.to_dict())
 
     # ==================================================
-    # Conflict Detection
+    # Conflict & Risk Detection
     # ==================================================
     conflicts = []
 
@@ -121,9 +128,6 @@ if st.button("Run Assignment Agent"):
     if "maintenance" in drone["status"]:
         conflicts.append("Drone under maintenance")
 
-    if mission_weather == "rainy" and drone["weather_resistance"] != "IP43":
-        conflicts.append("Weather compatibility issue")
-
     if pilot["location"] != drone["location"]:
         conflicts.append("Location mismatch")
 
@@ -133,19 +137,21 @@ if st.button("Run Assignment Agent"):
         end = pd.to_datetime(mission["end_date"])
         days = (end - start).days + 1
         cost = pilot["daily_rate_inr"] * days
-
         if cost > mission_budget:
             conflicts.append("Budget overrun")
     except:
         pass
 
+    # Weather warning
+    if weather_warning:
+        conflicts.append("Weather risk: non-IP43 drone assigned in rainy conditions")
+
     # ==================================================
-    # Display Conflicts
+    # Display Final Decision
     # ==================================================
     if conflicts:
-        st.warning("⚠ Conflicts Detected:")
+        st.warning("⚠ Alerts / Risks Identified:")
         for c in conflicts:
             st.write("-", c)
     else:
-        st.info("No conflicts detected. Mission ready.")
-
+        st.info("No conflicts detected. Mission ready to proceed.")
