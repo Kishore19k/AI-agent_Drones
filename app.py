@@ -2,9 +2,25 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="Drone Ops Coordinator AI", layout="wide")
-
 st.title("🚁 Drone Operations Coordinator AI")
 
+# ---------------------------
+# Helper: Detect Column by Keywords
+# ---------------------------
+def detect_column(df, keywords, required=True):
+    for col in df.columns:
+        for key in keywords:
+            if key.lower() in col.lower():
+                return col
+    if required:
+        st.error(f"❌ Could not detect column for {keywords}")
+        st.stop()
+    return None
+
+
+# ---------------------------
+# Upload CSV Files
+# ---------------------------
 pilot_file = st.file_uploader("Upload Pilot Roster CSV", type=["csv"])
 drone_file = st.file_uploader("Upload Drone Fleet CSV", type=["csv"])
 mission_file = st.file_uploader("Upload Missions CSV", type=["csv"])
@@ -17,12 +33,34 @@ if pilot_file and drone_file and mission_file:
 
     st.success("All files loaded successfully ✅")
 
-    # Debug view (optional but helpful)
-    # st.write("Pilot Columns:", pilots.columns.tolist())
-    # st.write("Drone Columns:", drones.columns.tolist())
-    # st.write("Mission Columns:", missions.columns.tolist())
+    # ---------------------------
+    # Auto Detect Important Columns
+    # ---------------------------
+    pilot_skill_col = detect_column(pilots, ["skill"])
+    pilot_status_col = detect_column(pilots, ["status"])
+    pilot_location_col = detect_column(pilots, ["location"])
+    pilot_name_col = detect_column(pilots, ["name"], required=False)
+    pilot_rate_col = detect_column(pilots, ["rate", "cost", "salary"], required=False)
 
-    # ---------- SELECT MISSION ----------
+    drone_status_col = detect_column(drones, ["status"])
+    drone_location_col = detect_column(drones, ["location"])
+    drone_id_col = detect_column(drones, ["id"])
+    drone_weather_col = detect_column(drones, ["weather", "rating"], required=False)
+
+    mission_skill_col = detect_column(missions, ["skill"])
+    mission_location_col = detect_column(missions, ["location"])
+    mission_weather_col = detect_column(missions, ["weather"], required=False)
+    mission_budget_col = detect_column(missions, ["budget"], required=False)
+    mission_duration_col = detect_column(missions, ["duration", "days"], required=False)
+
+    # Normalize text columns
+    pilots[pilot_skill_col] = pilots[pilot_skill_col].fillna("").astype(str).str.lower()
+    pilots[pilot_status_col] = pilots[pilot_status_col].astype(str).str.lower()
+    drones[drone_status_col] = drones[drone_status_col].astype(str).str.lower()
+
+    # ---------------------------
+    # Select Mission
+    # ---------------------------
     st.subheader("🎯 Select Mission")
     mission_index = st.selectbox("Choose Mission", missions.index)
     mission = missions.loc[mission_index]
@@ -30,111 +68,91 @@ if pilot_file and drone_file and mission_file:
     st.write("### Mission Details")
     st.json(mission.to_dict())
 
-    # ---------- ASSIGNMENT LOGIC ----------
+    # ---------------------------
+    # Assignment Logic
+    # ---------------------------
     if st.button("Run Assignment Agent"):
 
-        # -------- SAFE COLUMN DETECTION --------
+        mission_skill = str(mission[mission_skill_col]).lower()
+        mission_location = mission[mission_location_col]
 
-        # Detect skill column dynamically
-        skill_column = None
-        for col in pilots.columns:
-            if "skill" in col.lower():
-                skill_column = col
-                break
-
-        if skill_column is None:
-            st.error("❌ No skill-related column found in Pilot CSV")
-            st.stop()
-
-        # Normalize skill text
-        pilots[skill_column] = pilots[skill_column].fillna("").astype(str).str.lower()
-        mission_skill = str(mission.get("required_skills", "")).lower()
-
-        # Normalize status/location columns safely
-        if "status" not in pilots.columns or "location" not in pilots.columns:
-            st.error("❌ Pilot CSV must contain 'status' and 'location' columns")
-            st.stop()
-
-        if "status" not in drones.columns or "location" not in drones.columns:
-            st.error("❌ Drone CSV must contain 'status' and 'location' columns")
-            st.stop()
-
-        # ---------- FIND MATCHING PILOTS ----------
+        # ---- Find Available Pilots ----
         matching_pilots = pilots[
-            (pilots["status"].astype(str).str.lower() == "available") &
-            (pilots[skill_column].str.contains(mission_skill)) &
-            (pilots["location"] == mission.get("location"))
+            (pilots[pilot_status_col] == "available") &
+            (pilots[pilot_skill_col].str.contains(mission_skill)) &
+            (pilots[pilot_location_col] == mission_location)
         ]
 
-        # ---------- FIND MATCHING DRONES ----------
+        # ---- Find Available Drones ----
         matching_drones = drones[
-            (drones["status"].astype(str).str.lower() == "available") &
-            (drones["location"] == mission.get("location"))
+            (drones[drone_status_col] == "available") &
+            (drones[drone_location_col] == mission_location)
         ]
 
-        # Weather rule (if column exists)
-        if "weather" in mission and "weather_rating" in drones.columns:
-            if str(mission["weather"]).lower() == "rainy":
+        # ---- Weather Rule ----
+        if mission_weather_col and drone_weather_col:
+            mission_weather = str(mission[mission_weather_col]).lower()
+            if mission_weather == "rainy":
                 matching_drones = matching_drones[
-                    matching_drones["weather_rating"] == "IP43"
+                    drones[drone_weather_col].str.upper() == "IP43"
                 ]
 
-        # ---------- RESULTS ----------
+        # ---------------------------
+        # Display Results
+        # ---------------------------
         if matching_pilots.empty:
             st.error("❌ No suitable pilot available.")
-        elif matching_drones.empty:
+            st.stop()
+
+        if matching_drones.empty:
             st.error("❌ No suitable drone available.")
-        else:
-            pilot = matching_pilots.iloc[0]
-            drone = matching_drones.iloc[0]
+            st.stop()
 
-            st.success("✅ Assignment Successful")
+        pilot = matching_pilots.iloc[0]
+        drone = matching_drones.iloc[0]
 
-            st.subheader("👨‍✈️ Assigned Pilot")
-            st.json(pilot.to_dict())
+        st.success("✅ Assignment Successful")
 
-            st.subheader("🚁 Assigned Drone")
-            st.json(drone.to_dict())
+        st.subheader("👨‍✈️ Assigned Pilot")
+        st.json(pilot.to_dict())
 
-            # ---------- CONFLICT CHECK ----------
-            conflicts = []
+        st.subheader("🚁 Assigned Drone")
+        st.json(drone.to_dict())
 
-            # Skill check
-            if mission_skill not in pilot[skill_column]:
-                conflicts.append("Skill mismatch")
+        # ---------------------------
+        # Conflict Detection
+        # ---------------------------
+        conflicts = []
 
-            # Maintenance check
-            if "maintenance" in drone["status"].lower():
-                conflicts.append("Drone under maintenance")
+        if mission_skill not in pilot[pilot_skill_col]:
+            conflicts.append("Skill mismatch")
 
-            # Weather compatibility
-            if "weather" in mission and "weather_rating" in drones.columns:
-                if str(mission["weather"]).lower() == "rainy" and drone.get("weather_rating") != "IP43":
-                    conflicts.append("Weather compatibility issue")
+        if "maintenance" in drone[drone_status_col]:
+            conflicts.append("Drone under maintenance")
 
-            # Location mismatch
-            if pilot["location"] != drone["location"]:
-                conflicts.append("Location mismatch")
+        if mission_weather_col and drone_weather_col:
+            if mission_weather == "rainy" and drone[drone_weather_col] != "IP43":
+                conflicts.append("Weather compatibility issue")
 
-            # Budget check (safe)
-            daily_rate = pilot.get("daily_rate", 0)
-            duration = mission.get("duration_days", 0)
-            budget = mission.get("budget", 0)
+        if pilot[pilot_location_col] != drone[drone_location_col]:
+            conflicts.append("Location mismatch")
 
+        # Budget Check
+        if pilot_rate_col and mission_budget_col and mission_duration_col:
             try:
-                cost = float(daily_rate) * float(duration)
-                if budget and cost > float(budget):
+                cost = float(pilot[pilot_rate_col]) * float(mission[mission_duration_col])
+                if cost > float(mission[mission_budget_col]):
                     conflicts.append("Budget overrun")
             except:
                 pass
 
-            # Display conflicts
-            if conflicts:
-                st.warning("⚠ Conflicts Detected:")
-                for c in conflicts:
-                    st.write("-", c)
-            else:
-                st.info("No conflicts detected. Mission ready.")
+        # Display conflicts
+        if conflicts:
+            st.warning("⚠ Conflicts Detected:")
+            for c in conflicts:
+                st.write("-", c)
+        else:
+            st.info("No conflicts detected. Mission ready.")
 
 else:
-    st.warning("Please upload all three CSV files to continue.")
+    st.warning("Please upload all three CSV files.")
