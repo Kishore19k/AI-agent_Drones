@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
+# ======================================================
+# Page config
+# ======================================================
 st.set_page_config(page_title="Drone Ops Coordinator AI", layout="wide")
 st.title("🚁 Drone Operations Coordinator AI")
 
@@ -26,7 +29,7 @@ missions = pd.read_csv(mission_file)
 st.success("All files loaded successfully ✅")
 
 # ======================================================
-# Normalize Text Columns (SAFE)
+# Normalize columns (SAFE)
 # ======================================================
 pilots["skills"] = pilots["skills"].fillna("").astype(str).str.lower()
 pilots["certifications"] = pilots["certifications"].fillna("").astype(str).str.lower()
@@ -40,7 +43,7 @@ missions["required_certs"] = missions["required_certs"].fillna("").astype(str).s
 missions["weather_forecast"] = missions["weather_forecast"].fillna("").astype(str).str.lower()
 
 # ======================================================
-# Select Mission
+# Mission selection
 # ======================================================
 st.subheader("🎯 Select Mission")
 mission_index = st.selectbox("Choose Mission", missions.index)
@@ -48,6 +51,62 @@ mission = missions.loc[mission_index]
 
 st.write("### Mission Details")
 st.json(mission.to_dict())
+
+# ======================================================
+# 💬 Chatbot Section (AFTER mission selection)
+# ======================================================
+st.subheader("💬 Drone Ops Chat Assistant")
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+user_input = st.chat_input("Ask me about assignment, risks, or decisions...")
+
+if user_input:
+    st.session_state.chat_history.append(
+        {"role": "user", "content": user_input}
+    )
+
+    text = user_input.lower()
+    response = ""
+
+    if "assign" in text:
+        response = "Click **Run Assignment Agent** to generate a pilot and drone assignment for the selected mission."
+
+    elif "why" in text:
+        response = (
+            "Assignments are based on pilot skills, certifications, availability, "
+            "location match, drone availability, weather compatibility, and budget."
+        )
+
+    elif "risk" in text or "conflict" in text:
+        response = (
+            "I check for weather risks, maintenance issues, location mismatches, "
+            "certification gaps, and budget overruns."
+        )
+
+    elif "weather" in text:
+        response = (
+            "For rainy missions, IP43 drones are preferred. "
+            "If unavailable, I allow assignment with a weather risk alert."
+        )
+
+    else:
+        response = (
+            "You can ask me to assign a mission, explain risks, "
+            "or clarify why a pilot or drone was chosen."
+        )
+
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": response}
+    )
+
+    with st.chat_message("assistant"):
+        st.markdown(response)
 
 # ======================================================
 # Assignment Agent
@@ -61,7 +120,7 @@ if st.button("Run Assignment Agent"):
     mission_budget = mission["mission_budget_inr"]
 
     # --------------------------------------------------
-    # Find Available Pilots (SOFT MATCH)
+    # Pilot Matching (SOFT)
     # --------------------------------------------------
     matching_pilots = pilots[
         (pilots["status"].str.contains("available")) &
@@ -76,7 +135,7 @@ if st.button("Run Assignment Agent"):
     pilot = matching_pilots.iloc[0]
 
     # --------------------------------------------------
-    # Find Available Drones (SOFT MATCH)
+    # Drone Matching (SOFT)
     # --------------------------------------------------
     matching_drones = drones[
         (drones["status"].str.contains("available")) &
@@ -87,9 +146,7 @@ if st.button("Run Assignment Agent"):
         st.error("❌ No drone available at mission location.")
         st.stop()
 
-    # --------------------------------------------------
-    # Weather Handling (WARN, DON’T FAIL)
-    # --------------------------------------------------
+    # Weather handling (WARN, DON’T FAIL)
     weather_warning = False
 
     if mission_weather == "rainy":
@@ -99,12 +156,12 @@ if st.button("Run Assignment Agent"):
         if not ip43_drones.empty:
             matching_drones = ip43_drones
         else:
-            weather_warning = True  # allow with warning
+            weather_warning = True
 
     drone = matching_drones.iloc[0]
 
     # ==================================================
-    # Assignment Output
+    # Output Assignment
     # ==================================================
     st.success("✅ Assignment Generated")
 
@@ -115,7 +172,7 @@ if st.button("Run Assignment Agent"):
     st.json(drone.to_dict())
 
     # ==================================================
-    # Conflict & Risk Detection
+    # Conflict / Risk Detection
     # ==================================================
     conflicts = []
 
@@ -142,12 +199,11 @@ if st.button("Run Assignment Agent"):
     except:
         pass
 
-    # Weather warning
     if weather_warning:
         conflicts.append("Weather risk: non-IP43 drone assigned in rainy conditions")
 
     # ==================================================
-    # Display Final Decision
+    # Final Decision Explanation
     # ==================================================
     if conflicts:
         st.warning("⚠ Alerts / Risks Identified:")
